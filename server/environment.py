@@ -105,7 +105,7 @@ class SmartWarehouseEnv(Environment):
                 p["deadline"] -= 1
                 if p["deadline"] == 0:
                     reward  -= 0.5
-                    message += f"⚠️ Package {p['id']} deadline expired! -0.5  "
+                    message += f"Package {p['id']} deadline expired! -0.5  "
 
         # ── Process the action ─────────────────────────────────────
         if action.action == "no_op":
@@ -155,7 +155,7 @@ class SmartWarehouseEnv(Environment):
                         pkg_id                 = self._carrying
                         self._carrying         = None
                         reward                += 1.0
-                        message = f"✅ Package {pkg_id} delivered to (0,0)! +1.0"
+                        message = f"Package {pkg_id} delivered to (0,0)! +1.0"
                         break
             elif self._carrying and self._robot_pos != DELIVERY_ZONE:
                 reward  -= 0.2
