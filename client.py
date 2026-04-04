@@ -33,3 +33,30 @@ class WarehouseClient(EnvClient):
             k: v for k, v in payload.items()
             if k in RobotState.model_fields
         })
+    
+    # Override async methods to make them sync-compatible
+    def reset(self, seed=None, options=None, **kwargs):
+        """Synchronous wrapper for reset"""
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(
+            super().reset(seed=seed, options=options, **kwargs)
+        )
+    
+    def step(self, action, **kwargs):
+        """Synchronous wrapper for step"""
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(
+            super().step(action, **kwargs)
+        )

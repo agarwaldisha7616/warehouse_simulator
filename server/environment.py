@@ -1,4 +1,5 @@
 import copy
+from collections import deque
 from openenv.core import Environment
 import sys, os
 
@@ -47,7 +48,10 @@ TASK_CONFIGS = {
     },
 }
 
-DELIVERY_ZONE = [0, 0]
+DELIVERY_ZONE = (0, 0)
+
+# Precomputed direction deltas (frozen for speed)
+_MOVE_DELTAS = {"up": (0, 1), "down": (0, -1), "left": (-1, 0), "right": (1, 0)}
 
 
 class SmartWarehouseEnv(Environment):
@@ -58,7 +62,8 @@ class SmartWarehouseEnv(Environment):
         cfg = copy.deepcopy(TASK_CONFIGS[self._task_level])
         self._grid_size   = cfg["grid_size"]
         self._packages    = cfg["packages"]
-        self._obstacles   = cfg["obstacles"]
+        # OPTIMIZED: Use a frozenset of tuples for O(1) obstacle lookup
+        self._obstacle_set = frozenset(tuple(o) for o in cfg["obstacles"])
         self._max_steps   = cfg["max_steps"]
         self._steps       = 0
         self._robot_pos   = [0, 0]
@@ -77,12 +82,15 @@ class SmartWarehouseEnv(Environment):
             grid_size=self._grid_size,
         )
 
+        # SAFETY: Verify every package is reachable from robot start via BFS
+        self._verify_reachability()
+
         return RobotObservation(
             done=False,
             reward=None,
-            robot_position=list(self._robot_pos),                    # FIX: list() not tuple()
+            robot_position=list(self._robot_pos),
             packages=self._pkg_snapshot(),
-            obstacles=[list(o) for o in self._obstacles],            # FIX: list() not tuple()
+            obstacles=[list(o) for o in self._obstacle_set],
             grid_size=self._grid_size,
             steps_remaining=self._max_steps,
             carrying_package=None,
@@ -110,20 +118,20 @@ class SmartWarehouseEnv(Environment):
                     message += f"Package {p['id']} deadline expired! -0.5 "
 
         # ── Process the action ─────────────────────────────────────
-        if action.action == "no_op":
+        act = action.action
+        if act == "no_op":
             message = message or "No-op."
 
-        elif action.action == "move":
-            delta = {"up": (0,1), "down": (0,-1), "left": (-1,0), "right": (1,0)}
-            dx, dy   = delta.get(action.direction, (0, 0))
-            new_pos  = [self._robot_pos[0]+dx, self._robot_pos[1]+dy]
-            in_bounds = (0 <= new_pos[0] < self._grid_size and
-                         0 <= new_pos[1] < self._grid_size)
-            not_wall  = new_pos not in self._obstacles
+        elif act == "move":
+            # OPTIMIZED: Use precomputed deltas and frozenset for O(1) lookup
+            dx, dy   = _MOVE_DELTAS[action.direction]
+            nx, ny   = self._robot_pos[0] + dx, self._robot_pos[1] + dy
+            in_bounds = 0 <= nx < self._grid_size and 0 <= ny < self._grid_size
 
-            if in_bounds and not_wall:
+            if in_bounds and (nx, ny) not in self._obstacle_set:
+                # Valid move — compute shaping reward inline
                 prev_d = self._dist_to_nearest_undelivered(self._robot_pos)
-                self._robot_pos = new_pos
+                self._robot_pos = [nx, ny]
                 new_d  = self._dist_to_nearest_undelivered(self._robot_pos)
                 if new_d < prev_d:
                     reward  += 0.2
@@ -131,36 +139,38 @@ class SmartWarehouseEnv(Environment):
                 else:
                     message  = message or f"Moved {action.direction}."
             else:
+                # Wall hit or out of bounds: -0.5 penalty, stay in place
                 reward  -= 0.5
-                message  = message or f"Invalid move {action.direction} — boundary/obstacle! -0.5"
+                message  = message or f"Hit wall/boundary moving {action.direction}! -0.5"
 
-        elif action.action == "pick":
+        elif act == "pick":
             picked = False
-            for p in self._packages:
-                if (not p["delivered"]
-                        and p["position"] == self._robot_pos
-                        and self._carrying is None):
-                    self._carrying = p["id"]
-                    picked  = True
-                    message = f"Picked up Package {p['id']}!"
-                    break
+            px, py = self._robot_pos
+            if self._carrying is None:
+                for p in self._packages:
+                    if not p["delivered"] and p["position"][0] == px and p["position"][1] == py:
+                        self._carrying = p["id"]
+                        picked  = True
+                        message = f"Picked up Package {p['id']}!"
+                        break
             if not picked:
                 message = message or "Nothing to pick here."
 
-        elif action.action == "deliver":
-            if self._carrying and self._robot_pos == DELIVERY_ZONE:
-                for p in self._packages:
-                    if p["id"] == self._carrying and not p["delivered"]:
-                        p["delivered"]        = True
-                        self._delivered_count += 1
-                        pkg_id                = self._carrying
-                        self._carrying        = None
-                        reward  += 1.0
-                        message  = f"Package {pkg_id} delivered to (0,0)! +1.0"
-                        break
-            elif self._carrying and self._robot_pos != DELIVERY_ZONE:
-                reward  -= 0.2
-                message  = "Wrong delivery spot! Bring package to (0,0). -0.2"
+        elif act == "deliver":
+            if self._carrying:
+                if self._robot_pos[0] == DELIVERY_ZONE[0] and self._robot_pos[1] == DELIVERY_ZONE[1]:
+                    for p in self._packages:
+                        if p["id"] == self._carrying and not p["delivered"]:
+                            p["delivered"]        = True
+                            self._delivered_count += 1
+                            pkg_id                = self._carrying
+                            self._carrying        = None
+                            reward  += 1.0
+                            message  = f"Package {pkg_id} delivered to (0,0)! +1.0"
+                            break
+                else:
+                    reward  -= 0.2
+                    message  = "Wrong delivery spot! Bring package to (0,0). -0.2"
             else:
                 message = message or "Not carrying anything to deliver."
 
@@ -196,9 +206,9 @@ class SmartWarehouseEnv(Environment):
         return RobotObservation(
             done=self._done,
             reward=reward,
-            robot_position=list(self._robot_pos),                    # FIX: list() not tuple()
+            robot_position=list(self._robot_pos),
             packages=self._pkg_snapshot(),
-            obstacles=[list(o) for o in self._obstacles],            # FIX: list() not tuple()
+            obstacles=[list(o) for o in self._obstacle_set],
             grid_size=self._grid_size,
             steps_remaining=self._max_steps - self._steps,
             carrying_package=self._carrying,
@@ -216,3 +226,27 @@ class SmartWarehouseEnv(Environment):
             abs(pos[0]-p["position"][0]) + abs(pos[1]-p["position"][1])
             for p in undelivered
         )
+
+    def _verify_reachability(self):
+        """BFS from robot start — warns if any package is unreachable."""
+        gs = self._grid_size
+        obs = self._obstacle_set
+        start = (self._robot_pos[0], self._robot_pos[1])
+
+        visited = {start}
+        queue = deque([start])
+        while queue:
+            cx, cy = queue.popleft()
+            for dx, dy in _MOVE_DELTAS.values():
+                nx, ny = cx + dx, cy + dy
+                if 0 <= nx < gs and 0 <= ny < gs and (nx, ny) not in obs and (nx, ny) not in visited:
+                    visited.add((nx, ny))
+                    queue.append((nx, ny))
+
+        for p in self._packages:
+            pkg = tuple(p["position"])
+            if pkg not in visited:
+                print(
+                    f"[WARNING] Package {p['id']} at {list(pkg)} is NOT reachable "
+                    f"from {list(start)} in episode {self._episode_id}!"
+                )
