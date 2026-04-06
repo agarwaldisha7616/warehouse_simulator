@@ -1,43 +1,40 @@
 # models.py
-#   └─ Define data types (Pydantic)
-#      - RobotAction (what agent can do)
-#      - RobotObservation (what agent sees)
-#      - RobotState (environment response)
-from pydantic import BaseModel
-from typing import Optional
+from typing import List, Optional
+import os
+import torch
+from pydantic import ConfigDict, BaseModel
+from openenv.core.env_server import Action, Observation, State
 
-class RobotAction(BaseModel):
-    """
-    What robot can do in one step
-    Example:
-      RobotAction(direction="right", intent="move")
-    """                                         
-    direction: str  # "up", "down", "left", "right", "none"
-    intent: str     # "move", "pick", "dilever"
+class RobotAction(Action):
+    model_config = ConfigDict(extra="allow")
+    direction: str = "none"  # "up", "down", "left", "right", "none"
+    act: str = "move"        # "move", "pick", "deliver", "no_op"
+    reasoning: Optional[str] = None
+    target: Optional[str] = None
 
-class RobotObservation(BaseModel):
-    """
-    What the robot sees/Knows
-    
-    Example
-    obs.robot_x = 0
-    obs.robot_y = 0
-    obs.package = {...}
-    """
+class RobotObservation(Observation):
+    model_config = ConfigDict(extra="ignore")
+    done: bool = False
+    reward: Optional[float] = None
+    robot_position: List[int] = [0, 0]
+    grid_size: int = 5
+    packages: List[dict] = []
+    obstacles: List[List[int]] = []
+    steps_remaining: int = 20
+    carrying_package: Optional[str] = None
+    message: str = ""
+    delivered_count: int = 0
+    total_packages: int = 0
 
-    # Position of the robot in 2D grid
-    robot_x: int    # Horizontal {Column}
-    robot_y: int    # Vertical {Row}
-    holding: Optional[str]  # which package robot is holding (if any)
-    packages: dict 
-    time_elapsed: int # Count of steps since start of episode
-    time_remaining: int # Count of steps remaining in the episode
-    grid: list 
-    
-class RobotState(BaseModel):
-    """
-    What environment returns after each step 
-    
-    Contains everything step() should returns
-    """
+class RobotState(State):
+    model_config = ConfigDict(extra="ignore")
+    task_level: str = "easy"
+    total_packages: int = 0
+    delivered_count: int = 0
+    grid_size: int = 5
+    score: float = 0.0
+    max_steps: int = 20
 
+class LLMRequest(BaseModel):
+    prompt: str
+    session_id: Optional[str] = "default"
