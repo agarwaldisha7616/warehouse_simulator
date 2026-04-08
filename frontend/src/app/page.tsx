@@ -16,6 +16,7 @@ type PackageInfo = {
 };
 type Task = {
   action: "move_to" | "move" | "pick" | "deliver" | "no_op";
+  agent_id?: string;
   target?: string;
   direction?: "up" | "down" | "left" | "right";
   steps?: number;
@@ -28,36 +29,55 @@ type ObservationWrapper = {
   done: boolean;
   reward: number | null;
   observation: {
-    robot_position: RobotPosition;
+    robots: Record<string, { pos: [number, number], carrying_id: string | null }>;
     grid_size: number;
     packages: PackageInfo[];
     obstacles: [number, number][];
     steps_remaining: number;
-    carrying_package: string | null;
     message: string;
     delivered_count: number;
     total_packages: number;
+    next_agent_id: string;
+    last_action_failed: boolean;
+    collision_reason?: string | null;
   };
 };
 
-const API_BASE = "http://localhost:7860";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:7860/ui";
 
 // --- 3D Components ---
 
-const Robot = ({ position, carrying, gridSize }: { position: RobotPosition, carrying: string | null, gridSize: number }) => {
+const ROBOT_COLORS = ["#38bdf8", "#f59e0b", "#34d399", "#fb7185"];
+
+const Robot = ({
+  id,
+  position,
+  carrying,
+  gridSize,
+  active,
+}: {
+  id: string;
+  position: [number, number],
+  carrying: string | null,
+  gridSize: number,
+  active: boolean,
+}) => {
   const meshRef = useRef<THREE.Group>(null);
   const safeGridSize = gridSize || 5;
   const offset = safeGridSize / 2 - 0.5;
   
-  // Mapping: Grid X -> 3D X, Grid Y -> 3D Z
-  const targetX = position ? position[0] - offset : 0; 
-  const targetZ = position ? position[1] - offset : 0;
+  // Ensure position exists with a fallback
+  const safePos = position || [0, 0];
+  const targetX = safePos[0] - offset; 
+  const targetZ = safePos[1] - offset;
+  const robotIndex = Number(id.split("_")[1] ?? "1") - 1;
+  const accent = ROBOT_COLORS[(robotIndex + ROBOT_COLORS.length) % ROBOT_COLORS.length];
   
-  const [prevPos, setPrevPos] = useState<RobotPosition>(position);
+  const [prevPos, setPrevPos] = useState<[number, number]>(safePos);
   const [rotation, setRotation] = useState(0);
 
   useFrame((state, delta) => {
-    if (meshRef.current) {
+    if (meshRef.current && position) {
       // Smooth interpolation
       meshRef.current.position.x = THREE.MathUtils.lerp(meshRef.current.position.x, targetX, 0.1);
       meshRef.current.position.z = THREE.MathUtils.lerp(meshRef.current.position.z, targetZ, 0.1);
@@ -69,26 +89,44 @@ const Robot = ({ position, carrying, gridSize }: { position: RobotPosition, carr
         setRotation(Math.atan2(dx, dz));
         setPrevPos(position);
       }
-      meshRef.current.rotation.y = THREE.MathUtils.lerp(meshRef.current.rotation.y, rotation, 0.1);
     }
   });
 
   return (
-    <group ref={meshRef}>
-      {/* Robot Body */}
+    <group ref={meshRef} rotation={[0, rotation, 0]}>
       <Box args={[0.7, 0.5, 0.7]} position={[0, 0.25, 0]} castShadow>
-        <meshStandardMaterial color={carrying ? "#f59e0b" : "#3b82f6"} metalness={0.5} roughness={0.2} />
+        <meshStandardMaterial color={carrying ? "#facc15" : accent} metalness={0.5} roughness={0.2} />
       </Box>
-      {/* Robot Eye/Front */}
-      <Box args={[0.4, 0.2, 0.1]} position={[0, 0.35, 0.35]}>
-        <meshStandardMaterial color="#1e293b" emissive="#60a5fa" emissiveIntensity={1} />
+      <Box args={[0.52, 0.18, 0.08]} position={[0, 0.34, 0.36]}>
+        <meshStandardMaterial color="#020617" emissive={active ? accent : "#1e293b"} emissiveIntensity={active ? 1.2 : 0.3} />
       </Box>
-      {/* Carrying Indicator */}
+      <Cylinder args={[0.08, 0.08, 0.22, 16]} position={[0, 0.62, 0]} castShadow>
+        <meshStandardMaterial color="#94a3b8" metalness={0.85} roughness={0.2} />
+      </Cylinder>
+      {[-0.22, 0.22].map((x) => (
+        <Cylinder key={x} args={[0.08, 0.08, 0.1, 16]} position={[x, 0.05, 0.26]} rotation={[Math.PI / 2, 0, 0]}>
+          <meshStandardMaterial color="#0f172a" />
+        </Cylinder>
+      ))}
+      {[-0.22, 0.22].map((x) => (
+        <Cylinder key={`${x}-rear`} args={[0.08, 0.08, 0.1, 16]} position={[x, 0.05, -0.26]} rotation={[Math.PI / 2, 0, 0]}>
+          <meshStandardMaterial color="#0f172a" />
+        </Cylinder>
+      ))}
       {carrying && (
-        <Box args={[0.5, 0.5, 0.5]} position={[0, 0.75, 0]} castShadow>
-          <meshStandardMaterial color="#ef4444" />
+        <Box args={[0.45, 0.35, 0.45]} position={[0, 0.74, 0]} castShadow>
+          <meshStandardMaterial color="#ef4444" emissive="#ef4444" emissiveIntensity={0.35} />
         </Box>
       )}
+      <Text
+        position={[0, 1.05, 0]}
+        fontSize={0.18}
+        color={active ? "#f8fafc" : "#94a3b8"}
+        anchorX="center"
+        anchorY="middle"
+      >
+        {id.replace("_", " ")}
+      </Text>
     </group>
   );
 };
@@ -239,24 +277,28 @@ export default function WarehouseSimulator() {
 
       if (data && data.observation) {
         setObs(data);
-        addLog(`[PLAN] ${task.action} (${task.target || task.direction}) -> ${robot_action.act} ${robot_action.direction}`);
+        addLog(`[PLAN] ${task.action} (${task.target || task.direction}) -> ${robot_action.action} ${robot_action.direction}`);
         
         // 3. Determine if task is complete
         let isComplete = false;
         if (task.action === "move_to") {
-          const rx = data.observation.robot_position[0];
-          const ry = data.observation.robot_position[1];
-          let tx = 0, ty = 0;
-          if (task.target === "Delivery Zone") {
-            tx = 0; ty = 0;
-          } else {
-            const pkg = data.observation.packages.find((p: any) => p.id === task.target);
-            if (pkg) {
-              tx = pkg.position[0];
-              ty = pkg.position[1];
+          const agentId = task.agent_id || "robot_1";
+          const robot = data.observation.robots[agentId];
+          if (robot) {
+            const rx = robot.pos[0];
+            const ry = robot.pos[1];
+            let tx = 0, ty = 0;
+            if (task.target === "Delivery Zone") {
+              tx = 0; ty = 0;
+            } else {
+              const pkg = data.observation.packages.find((p: any) => p.id === task.target);
+              if (pkg) {
+                tx = pkg.position[0];
+                ty = pkg.position[1];
+              }
             }
+            if (rx === tx && ry === ty) isComplete = true;
           }
-          if (rx === tx && ry === ty) isComplete = true;
         } else if (task.action === "move") {
           const remainingSteps = (task.steps || 1) - 1;
           if (remainingSteps <= 0) {
@@ -347,9 +389,9 @@ export default function WarehouseSimulator() {
       const res = await fetch(`${API_BASE}/step`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          action: { direction: "none", act: "no_op" } 
-        }), 
+        body: JSON.stringify({
+          action: await (await fetch(`${API_BASE}/agent_action`)).json(),
+        }),
       });
       const data = await res.json();
       if (data && data.observation) {
@@ -371,10 +413,7 @@ export default function WarehouseSimulator() {
     setLoading(true);
     try {
       // 1. Get action from AI Agent
-      const agentRes = await fetch(`${API_BASE}/agent_action`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
+      const agentRes = await fetch(`${API_BASE}/agent_action`);
       const robot_action = await agentRes.json();
       
       if (robot_action.reasoning) setAiReasoning(robot_action.reasoning);
@@ -390,7 +429,7 @@ export default function WarehouseSimulator() {
       
       if (data && data.observation) {
         setObs(data);
-        addLog(`[AUTO] ${robot_action.act} ${robot_action.direction} -> ${data.observation.message}`);
+        addLog(`[AUTO] ${robot_action.action} ${robot_action.direction} -> ${data.observation.message}`);
       } else {
         setError("Invalid response from server on auto step");
       }
@@ -466,11 +505,16 @@ export default function WarehouseSimulator() {
             {obs && obs.observation && (
               <>
                 <Floor gridSize={obs.observation.grid_size} />
-                <Robot 
-                  position={obs.observation.robot_position} 
-                  carrying={obs.observation.carrying_package} 
-                  gridSize={obs.observation.grid_size}
-                />
+                {Object.entries(obs.observation.robots).map(([id, data]) => (
+                  <Robot 
+                    key={id}
+                    id={id}
+                    position={data.pos} 
+                    carrying={data.carrying_id} 
+                    gridSize={obs.observation.grid_size}
+                    active={obs.observation.next_agent_id === id}
+                  />
+                ))}
                 {obs.observation.packages.map((pkg) => (
                   <PackageComponent 
                     key={pkg.id} 
@@ -507,8 +551,8 @@ export default function WarehouseSimulator() {
                 <div className="space-y-4">
                   <div className="flex justify-between items-end border-b border-slate-800 pb-3">
                     <p className="text-slate-500 text-[10px] uppercase font-bold tracking-widest">Total Reward</p>
-                    <p className={`text-2xl font-mono leading-none ${(obs.observation.reward ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
-                      {(obs.observation.reward ?? 0).toFixed(1)}
+                    <p className={`text-2xl font-mono leading-none ${(obs.reward ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                      {(obs.reward ?? 0).toFixed(1)}
                     </p>
                   </div>
 
@@ -523,6 +567,14 @@ export default function WarehouseSimulator() {
                       <p className="text-slate-500 text-[9px] uppercase font-bold mb-1">Steps Left</p>
                       <p className="text-lg font-mono text-blue-400">{obs.observation.steps_remaining}</p>
                     </div>
+                  </div>
+
+                  <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700/50">
+                    <p className="text-slate-500 text-[9px] uppercase font-bold mb-1">Active Robot</p>
+                    <p className="text-base font-mono text-amber-300">{obs.observation.next_agent_id}</p>
+                    {obs.observation.collision_reason && (
+                      <p className="mt-2 text-[10px] text-rose-300">{obs.observation.collision_reason}</p>
+                    )}
                   </div>
 
                   <div className="pt-2">

@@ -24,3 +24,5 @@ dist/
 build/
 *.egg-info/
 uv.lock
+PROJECT_CONTEXT.md
+

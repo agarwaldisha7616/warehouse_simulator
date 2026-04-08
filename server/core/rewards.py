@@ -7,15 +7,16 @@ class BaseRewardSystem(ABC):
         pass
 
 class DefaultWarehouseRewards(BaseRewardSystem):
-    """Reward system for the warehouse simulator."""
+    """Continuous reward system for the warehouse simulator."""
     
     def __init__(self):
         self.VALID_MOVE = 1.0
         self.WALL_PENALTY = -5.0
-        self.DELIVERY_SUCCESS = 10.0
-        self.DEADLINE_EXPIRED = -2.0
-        self.PICK_UP = 2.0
+        self.DELIVERY_SUCCESS = 20.0
+        self.DEADLINE_EXPIRED = -5.0
+        self.PICK_UP = 5.0
         self.WRONG_DELIVERY_SPOT = -2.0
+        self.INVALID_ACTION = -1.0
         self.FAILURE_STREAK_PENALTY = -1.0
         self.failure_streak = 0
 
@@ -39,6 +40,9 @@ class DefaultWarehouseRewards(BaseRewardSystem):
         elif event == "wrong_spot":
             self.failure_streak += 1
             reward = self.WRONG_DELIVERY_SPOT + (self.failure_streak * self.FAILURE_STREAK_PENALTY)
+        elif event == "invalid_action":
+            self.failure_streak += 1
+            reward = self.INVALID_ACTION + (self.failure_streak * self.FAILURE_STREAK_PENALTY)
         elif event == "step":
             # Small step penalty to encourage speed
             reward = -0.1

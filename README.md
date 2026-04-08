@@ -1,99 +1,110 @@
-# Smart Warehouse Simulator (Hackathon Edition)
+# Smart Warehouse Simulator
 
-A high-fidelity warehouse robot simulation featuring **Multi-Step AI Planning**, **BFS Pathfinding**, and **LLM Integration (Gemini/OpenAI)**.
+OpenEnv-compliant warehouse simulation with multi-robot coordination, obstacle avoidance, package pickup and delivery, and an OpenAI-compatible LLM planning path.
 
----
+## Architecture
 
-## 🚀 Key Features
+### Backend
+- FastAPI + OpenEnv server entrypoint: [server/app.py](/home/niku/Documents/warehouse_simulator/server/app.py)
+- Environment implementation: [server/environment.py](/home/niku/Documents/warehouse_simulator/server/environment.py)
+- Deterministic robot coordination and pathing: [server/core/agents.py](/home/niku/Documents/warehouse_simulator/server/core/agents.py)
+- Task definitions by difficulty: [server/core/constants.py](/home/niku/Documents/warehouse_simulator/server/core/constants.py)
+- OpenAI-compatible LLM planner: [server/core/llm.py](/home/niku/Documents/warehouse_simulator/server/core/llm.py)
 
-- **Multi-Step LLM Planning**: Natural language instructions (e.g., "Pick up A then deliver it") are parsed into structured task sequences.
-- **Smart BFS Pathfinding**: Robot automatically calculates the shortest path to targets while avoiding obstacles and boundaries.
-- **High-Fidelity 3D UI**: Smooth robot animations (lerp/rotation), glassmorphism dashboard, and real-time efficiency metrics.
-- **Strict Inference Pipeline**: Standardized `inference.py` using OpenAI-compatible clients and required logging format.
-- **Robust Reward System**: Penalties for wall hits and failure streaks; bonuses for successful deliveries.
+### Frontend
+- Next.js demo UI: [frontend/src/app/page.tsx](/home/niku/Documents/warehouse_simulator/frontend/src/app/page.tsx)
+- The UI talks to session-aware demo endpoints under `/ui/*`
 
----
+### Inference
+- Root inference runner: [inference.py](/home/niku/Documents/warehouse_simulator/inference.py)
+- Uses OpenAI-compatible chat completions and emits `[START]`, `[STEP]`, `[END]` logs
 
-## 🛠️ Project Structure
+## Action Space
+- `agent_id`: robot identifier such as `robot_1`
+- `action`: `move | move_to | pick | deliver | no_op`
+- `direction`: `up | down | left | right | none`
+- `target`: optional package id or `Delivery Zone`
 
-```
-warehouse_simulator/
-├── server/              # FastAPI Backend
-│   ├── app.py           # API endpoints (/llm_plan, /task_to_action, /reset)
-│   ├── environment.py   # Simulation Engine
-│   └── core/
-│       ├── agents.py    # BFS Pathfinding Logic
-│       ├── llm.py       # Gemini/OpenAI Integration
-│       └── rewards.py   # Hackathon-ready Reward System
-├── frontend/            # Next.js + React Three Fiber Web UI
-│   └── src/app/page.tsx # 3D Visualization & Execution Queue
-├── inference.py         # Standardized evaluation script
-├── models.py            # Shared Pydantic schemas
-├── requirements.txt     # Backend dependencies
-└── README.md
-```
+## Observation Space
+- `robots`: per-robot position and carrying state
+- `packages`: package id, position, deadline, delivery status
+- `obstacles`: blocked grid cells
+- `grid_size`: board size
+- `steps_remaining`: remaining steps in the episode
+- `message`: feedback from the last step
+- `next_agent_id`: which robot acts next
+- `last_action_failed`: failure flag for the previous action
+- `collision_reason`: debug detail for blocked movement
 
----
+## Environment Variables
+- `API_BASE_URL`: OpenAI-compatible base URL, for example `https://router.huggingface.co/v1`
+- `MODEL_NAME`: model identifier, for example `Qwen/Qwen2.5-7B-Instruct`
+- `HF_TOKEN`: Hugging Face token or compatible API key
+- `ENV_URL`: environment server URL, default `http://localhost:7860`
 
-## ⚡ Quick Start
-
-### 1. Backend Setup
+## Setup
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Set your API Key (Optional for Gemini)
-export GEMINI_API_KEY="your_key_here"
-
-# Start Backend (Terminal 1)
-export PYTHONPATH=$(pwd)
-venv/bin/uvicorn server.app:app --port 7860 --reload
 ```
 
-### 2. Frontend Setup
+## Run Backend
 ```bash
-# Go to frontend
-cd frontend
-
-# Install & Run (Terminal 2)
-npm install
-npm run dev
+venv/bin/python -m uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```
-Open **http://localhost:3000**
 
-### 3. Inference Run (Strict Format)
+OpenEnv endpoints:
+- `/reset`
+- `/step`
+- `/state`
+- `/schema`
+- `/ws`
+
+Demo UI endpoints:
+- `/ui/reset`
+- `/ui/step`
+- `/ui/state`
+- `/ui/agent_action`
+- `/ui/task_to_action`
+- `/ui/llm_plan`
+
+## Run Frontend
 ```bash
-export API_BASE_URL="your_url"
-export MODEL_NAME="your_model"
-export HF_TOKEN="your_token"
-
-python3 inference.py "Go to shelf B and pick it up"
+npm run dev --prefix frontend
 ```
 
----
-
-## 🤖 LLM Agent Instruction Examples
-
-- **"Go to A"** - Moves to package A using BFS.
-- **"Pick up A then deliver it"** - Plans a 4-step mission: `move_to(A) -> pick -> move_to(0,0) -> deliver`.
-- **"Move right 3 steps then up 2"** - Precise directional control.
-- **"Avoid obstacles and go to B"** - Intelligent navigation.
-
----
-
-## 📊 Environment Metrics
-
-| Metric | Description |
-|---|---|
-| **Reward** | +1 (Valid Move), -5 (Wall Hit), +10 (Delivery) |
-| **Efficiency** | Ratio of delivered packages to total packages |
-| **Steps Left** | Budgeted steps remaining for the episode |
-| **AI Reasoning** | Live display of the LLM's thought process |
-
----
-
-## Pre-Submission Validation
-
+Optional custom backend URL for the frontend:
 ```bash
-python validate.py
+export NEXT_PUBLIC_API_BASE="http://localhost:7860/ui"
 ```
+
+## Run Inference
+```bash
+export API_BASE_URL="https://router.huggingface.co/v1"
+export MODEL_NAME="Qwen/Qwen2.5-7B-Instruct"
+export HF_TOKEN="hf_xxxxx"
+export ENV_URL="http://localhost:7860"
+
+python inference.py "Coordinate all robots to deliver every package safely."
+```
+
+Run a single level:
+```bash
+python inference.py --task-level hard "Deliver all packages safely."
+```
+
+## Validation
+```bash
+venv/bin/openenv validate . -v
+venv/bin/python validate.py
+npm run build --prefix frontend
+```
+
+## Difficulty Levels
+- `easy`: 2 robots, small grid, light obstacles
+- `medium`: 2 robots, more packages, tighter deadlines, more obstacles
+- `hard`: 3 robots, larger grid, denser routing pressure, more packages
+
+## Notes
+- The submission path is FastAPI/OpenEnv, not Flask.
+- The LLM path is OpenAI-compatible, not Gemini.
+- Heuristic fallback is disabled unless `ALLOW_HEURISTIC_FALLBACK` is explicitly enabled.

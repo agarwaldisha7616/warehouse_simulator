@@ -1,146 +1,261 @@
-# inference.py
+import argparse
 import os
-import json
-import time
-from typing import List, Dict, Any, Optional
-from openai import OpenAI
+import sys
+from typing import Iterable, List
 
-# 1. SETUP OPENAI CLIENT
-API_BASE_URL = os.environ.get("API_BASE_URL")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-3.5-turbo")
-HF_TOKEN = os.environ.get("HF_TOKEN")
+from client import WarehouseClient
+from models import RobotAction, RobotObservation
+from server.core.agents import MultiRobotCoordinator
+from server.core.constants import TASK_CONFIGS
+from server.core.llm import LLMPlanningError, WarehouseLLM
 
-client = OpenAI(
-    base_url=API_BASE_URL,
-    api_key=HF_TOKEN or "dummy"
-)
 
-class InferenceEngine:
-    def __init__(self):
-        # We simulate a 5x5 grid for the demo if no observation is provided
-        self.grid_size = 5
-        self.robot_pos = [0, 0]
-        self.carrying = None
-        self.packages = {"A": [2, 2], "B": [4, 4], "C": [0, 4]}
-        self.obstacles = [[1, 1], [2, 1], [3, 1]]
+ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
+DEBUG = os.getenv("DEBUG", "").lower() in {"1", "true", "yes", "on"}
+ALLOW_HEURISTIC_FALLBACK = os.getenv("ALLOW_HEURISTIC_FALLBACK", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
-    def get_plan(self, prompt: str) -> Dict[str, Any]:
-        """Convert natural language to structured JSON plan."""
-        system_prompt = f"""
-        You are a Warehouse AI. Convert instructions into a JSON plan.
-        Grid: {self.grid_size}x{self.grid_size}
-        Robot: {self.robot_pos}
-        Packages: {self.packages}
-        Obstacles: {self.obstacles}
-        
-        Allowed Actions:
-        - {{"action": "move_to", "target": "ID or Delivery Zone"}}
-        - {{"action": "pick", "target": "ID"}}
-        - {{"action": "deliver"}}
-        
-        Example Output:
-        {{
-            "tasks": [
-                {{"action": "move_to", "target": "A"}},
-                {{"action": "pick", "target": "A"}},
-                {{"action": "move_to", "target": "Delivery Zone"}},
-                {{"action": "deliver"}}
-            ]
-        }}
-        """
-        
-        try:
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0
-            )
-            content = response.choices[0].message.content.strip()
-            
-            # Clean JSON markdown if present
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-                
-            return json.loads(content.strip())
-        except Exception as e:
-            return {"tasks": [], "error": str(e)}
 
-    def run(self, prompt: str):
-        """Execute the plan with strict logging."""
-        print("[START]")
-        print(f"task: {prompt}\n")
-        
-        plan_data = self.get_plan(prompt)
-        tasks = plan_data.get("tasks", [])
-        
-        if not tasks:
-            print("[STEP]")
-            print("action: error")
-            print(f"message: {plan_data.get('error', 'Failed to generate plan')}")
-            print("status: failed\n")
-            print("[END]")
-            print("result: aborted")
-            return
+def _debug(message: str):
+    if DEBUG:
+        print(message, flush=True)
 
-        for task in tasks:
-            action = task.get("action")
-            target = task.get("target")
-            
-            print("[STEP]")
-            print(f"action: {action}")
-            if target:
-                print(f"target: {target}")
-            
-            # SIMULATE EXECUTION LOGIC
-            success = self._simulate_action(action, target)
-            print(f"status: {'success' if success else 'failed'}\n")
-            
-            if not success:
-                break
-                
-        print("[END]")
-        print("result: completed")
 
-    def _simulate_action(self, action: str, target: Optional[str]) -> bool:
-        """Simple movement simulation."""
-        time.sleep(0.1) # Simulate thinking/moving time
-        
-        if action == "move_to":
-            if target == "Delivery Zone":
-                self.robot_pos = [0, 0]
-            elif target in self.packages:
-                self.robot_pos = self.packages[target]
-            return True
-            
-        elif action == "pick":
-            if target in self.packages and self.robot_pos == self.packages[target]:
-                self.carrying = target
-                return True
-            return False
-            
-        elif action == "deliver":
-            if self.robot_pos == [0, 0] and self.carrying:
-                self.carrying = None
-                return True
-            return False
-            
-        return False
+def _format_action(action: RobotAction) -> str:
+    if action.action == "move":
+        return f"move({action.direction})"
+    if action.action == "move_to":
+        return f"move_to({action.target})"
+    if action.target:
+        return f"{action.action}({action.target})"
+    return f"{action.action}()"
 
-def main():
-    import sys
-    engine = InferenceEngine()
-    
-    # Default prompt if none provided
-    prompt = "Go to shelf B and pick it up"
-    if len(sys.argv) > 1:
-        prompt = " ".join(sys.argv[1:])
-        
-    engine.run(prompt)
+
+def _build_valid_actions(observation: dict) -> List[str]:
+    valid_actions = [
+        "move(up)",
+        "move(down)",
+        "move(left)",
+        "move(right)",
+        "no_op()",
+    ]
+    available_packages = [
+        package["id"]
+        for package in observation.get("packages", [])
+        if not package.get("delivered", False)
+    ]
+    next_agent_id = observation.get("next_agent_id", "robot_1")
+    robot = observation.get("robots", {}).get(next_agent_id, {})
+    carrying_id = robot.get("carrying_id")
+
+    for package_id in available_packages:
+        valid_actions.append(f"move_to({package_id})")
+        valid_actions.append(f"pick({package_id})")
+    if carrying_id:
+        valid_actions.append("move_to(Delivery Zone)")
+        valid_actions.append(f"deliver({carrying_id})")
+
+    return sorted(set(valid_actions))
+
+
+def _parse_action_string(action_text: str, agent_id: str) -> RobotAction:
+    action_text = action_text.strip()
+    if action_text == "no_op()":
+        return RobotAction(agent_id=agent_id, action="no_op", direction="none")
+
+    if action_text.startswith("move(") and action_text.endswith(")"):
+        direction = action_text[5:-1]
+        return RobotAction(agent_id=agent_id, action="move", direction=direction)
+
+    if action_text.startswith("move_to(") and action_text.endswith(")"):
+        target = action_text[8:-1]
+        return RobotAction(
+            agent_id=agent_id,
+            action="move_to",
+            direction="none",
+            target=target,
+        )
+
+    if action_text.startswith("pick(") and action_text.endswith(")"):
+        target = action_text[5:-1]
+        return RobotAction(
+            agent_id=agent_id,
+            action="pick",
+            direction="none",
+            target=target,
+        )
+
+    if action_text.startswith("deliver(") and action_text.endswith(")"):
+        target = action_text[8:-1]
+        return RobotAction(
+            agent_id=agent_id,
+            action="deliver",
+            direction="none",
+            target=target,
+        )
+
+    raise ValueError(f"Unsupported action text: {action_text}")
+
+
+def get_llm_action(observation, valid_actions, objective: str | None = None):
+    llm = WarehouseLLM(
+        api_base_url=API_BASE_URL,
+        model_name=MODEL_NAME,
+        api_key=HF_TOKEN,
+    )
+    return llm.choose_action(observation, valid_actions, objective=objective)
+
+
+def choose_next_action(
+    observation: RobotObservation,
+    objective: str,
+    coordinator: MultiRobotCoordinator,
+    llm: WarehouseLLM | None,
+) -> RobotAction:
+    observation_dict = observation.model_dump()
+    agent_id = observation.next_agent_id or "robot_1"
+
+    if llm is not None:
+        valid_actions = _build_valid_actions(observation_dict)
+        action_text = llm.choose_action(
+            observation_dict,
+            valid_actions,
+            objective=objective,
+        )
+        return _parse_action_string(action_text, agent_id)
+
+    if not ALLOW_HEURISTIC_FALLBACK:
+        raise LLMPlanningError(
+            "LLM is unavailable and heuristic fallback is disabled."
+        )
+    return coordinator.get_action(observation, agent_id=agent_id)
+
+
+def run_episode(
+    client: WarehouseClient,
+    task_level: str,
+    objective: str,
+    llm: WarehouseLLM | None,
+    coordinator: MultiRobotCoordinator,
+    max_steps_override: int | None = None,
+) -> float:
+    observation = client.reset(options={"task_level": task_level})
+    coordinator.reset()
+    step_limit = max_steps_override or TASK_CONFIGS[task_level]["max_steps"]
+    step_index = 0
+
+    print("[START]", flush=True)
+    print(f"task: {task_level}", flush=True)
+    print(f"objective: {objective}", flush=True)
+
+    while not observation.done and step_index < step_limit:
+        action = choose_next_action(observation, objective, coordinator, llm)
+        observation = client.step(action)
+        step_index += 1
+
+        print("[STEP]", flush=True)
+        print(f"task: {task_level}", flush=True)
+        print(f"step: {step_index}", flush=True)
+        print(f"agent: {action.agent_id}", flush=True)
+        print(f"action: {_format_action(action)}", flush=True)
+        print(f"reward: {observation.reward}", flush=True)
+        print(f"message: {observation.message}", flush=True)
+
+        _debug(
+            f"[DEBUG] {task_level=} {step_index=} action={_format_action(action)} "
+            f"next_agent={observation.next_agent_id} delivered={observation.delivered_count}"
+        )
+
+    score = (
+        observation.delivered_count / observation.total_packages
+        if observation.total_packages
+        else 0.0
+    )
+    print("[END]", flush=True)
+    print(f"task: {task_level}", flush=True)
+    print(f"steps: {step_index}", flush=True)
+    print(
+        f"delivered: {observation.delivered_count}/{observation.total_packages}",
+        flush=True,
+    )
+    print(f"score: {score:.3f}", flush=True)
+    return score
+
+
+def parse_args(argv: Iterable[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run the warehouse simulator baseline inference."
+    )
+    parser.add_argument(
+        "objective",
+        nargs="?",
+        default="Coordinate all robots to deliver every package safely.",
+        help="Natural-language objective for the controller.",
+    )
+    parser.add_argument(
+        "--task-level",
+        action="append",
+        choices=sorted(TASK_CONFIGS),
+        help="Task level(s) to run. Defaults to all levels.",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Optional hard cap on steps per task.",
+    )
+    return parser.parse_args(list(argv))
+
+
+def main(argv: Iterable[str] | None = None) -> int:
+    args = parse_args(argv or sys.argv[1:])
+    task_levels = args.task_level or list(TASK_CONFIGS.keys())
+    coordinator = MultiRobotCoordinator()
+
+    try:
+        llm = WarehouseLLM(
+            api_base_url=API_BASE_URL,
+            model_name=MODEL_NAME,
+            api_key=HF_TOKEN,
+        )
+    except LLMPlanningError as exc:
+        if not ALLOW_HEURISTIC_FALLBACK:
+            print(f"[ERROR] {exc}", flush=True)
+            return 1
+        llm = None
+        _debug(f"[DEBUG] Falling back to deterministic coordinator: {exc}")
+
+    client = WarehouseClient(base_url=ENV_URL).sync()
+    scores: List[float] = []
+
+    try:
+        with client:
+            for task_level in task_levels:
+                scores.append(
+                    run_episode(
+                        client,
+                        task_level,
+                        args.objective,
+                        llm,
+                        coordinator,
+                        max_steps_override=args.max_steps,
+                    )
+                )
+    except Exception as exc:
+        print(f"[ERROR] inference failed: {exc}", flush=True)
+        return 1
+
+    average_score = sum(scores) / len(scores) if scores else 0.0
+    _debug(f"[DEBUG] average_score={average_score:.3f}")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
