@@ -1,3 +1,47 @@
 # openenv.yaml
 #   └─ Configuration
 #      - Task definitions
+name: warehouse-simulator
+version: "1.0.0"
+description: "Smart Warehouse Robot Simulator — AI agent navigates a grid warehouse, picks packages, and delivers them under time deadlines."
+author: "Emergent Behavior"
+tags:
+  - openenv
+  - warehouse
+  - robotics
+  - navigation
+  - logistics
+
+observation_space:
+  robot_position: "Tuple[int, int] — current (x, y) of robot"
+  packages: "List[dict] — id, position, deadline, delivered status"
+  obstacles: "List[Tuple] — blocked grid cells"
+  grid_size: "int — N of N×N grid"
+  steps_remaining: "int — steps left in episode"
+  carrying_package: "Optional[str] — package ID held, or null"
+  message: "str — feedback from last action"
+
+action_space:
+  direction: "str — up | down | left | right"
+  action: "str — move | pick | deliver | no_op"
+
+tasks:
+  - id: easy
+    name: "Easy Warehouse"
+    description: "5x5 grid, 2 packages, no obstacles, 20 steps, deadlines at 15"
+    difficulty: easy
+    expected_score_random: "0.4–0.6"
+
+  - id: medium
+    name: "Medium Warehouse"
+    description: "10x10 grid, 4 packages, 5 obstacles, 50 steps, deadlines 7–12"
+    difficulty: medium
+    expected_score_random: "0.2–0.4"
+
+  - id: hard
+    name: "Hard Warehouse"
+    description: "15x15 grid, 6 packages, 15 maze obstacles, 100 steps, deadlines 5–10"
+    difficulty: hard
+    expected_score_random: "0.05–0.15"
+
+delivery_zone: "[0, 0]"
