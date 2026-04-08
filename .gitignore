@@ -1,0 +1,13 @@
+.env
+PROJECT_CONTEXT.md
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+venv/
+.venv/
+frontend/node_modules/
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
+uv.lock

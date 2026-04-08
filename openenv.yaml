@@ -1,47 +1,44 @@
-# openenv.yaml
-#   └─ Configuration
-#      - Task definitions
 name: warehouse-simulator
-version: "1.0.0"
-description: "Smart Warehouse Robot Simulator — AI agent navigates a grid warehouse, picks packages, and delivers them under time deadlines."
+version: "2.0.0"
+description: "Smart Warehouse Robot Simulator — Multi-agent AI system for navigating a grid warehouse, picking packages, and delivering them under deadlines while avoiding collisions."
 author: "Emergent Behavior"
 tags:
   - openenv
   - warehouse
   - robotics
-  - navigation
+  - multi-agent
   - logistics
 
 observation_space:
-  robot_position: "Tuple[int, int] — current (x, y) of robot"
+  robots: "Dict[str, Dict] — Dictionary of robot states, keyed by agent_id (e.g. robot_1). Contains 'pos' [x,y] and 'carrying_id'."
   packages: "List[dict] — id, position, deadline, delivered status"
   obstacles: "List[Tuple] — blocked grid cells"
   grid_size: "int — N of N×N grid"
   steps_remaining: "int — steps left in episode"
-  carrying_package: "Optional[str] — package ID held, or null"
   message: "str — feedback from last action"
 
 action_space:
-  direction: "str — up | down | left | right"
-  action: "str — move | pick | deliver | no_op"
+  agent_id: "str — The robot executing the action (e.g. robot_1, robot_2)"
+  direction: "str — up | down | left | right | none"
+  action: "str — move | pick | deliver | move_to | no_op"
 
 tasks:
   - id: easy
     name: "Easy Warehouse"
-    description: "5x5 grid, 2 packages, no obstacles, 20 steps, deadlines at 15"
+    description: "5x5 grid, 1 robot, 1 package, no obstacles. Test basic navigation and delivery."
     difficulty: easy
-    expected_score_random: "0.4–0.6"
+    expected_score_random: "0.2"
 
   - id: medium
     name: "Medium Warehouse"
-    description: "10x10 grid, 4 packages, 5 obstacles, 50 steps, deadlines 7–12"
+    description: "10x10 grid, 2 robots, 3 packages, 5 obstacles. Test path optimization and basic task allocation."
     difficulty: medium
-    expected_score_random: "0.2–0.4"
+    expected_score_random: "0.05"
 
   - id: hard
     name: "Hard Warehouse"
-    description: "15x15 grid, 6 packages, 15 maze obstacles, 100 steps, deadlines 5–10"
+    description: "15x15 grid, 3 robots, 5 packages, 15 obstacles. Requires advanced coordination and collision avoidance."
     difficulty: hard
-    expected_score_random: "0.05–0.15"
+    expected_score_random: "0.0"
 
 delivery_zone: "[0, 0]"
