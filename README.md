@@ -1,3 +1,9 @@
+---
+title: Smart Warehouse Simulator
+sdk: docker
+pinned: false
+---
+
 # Smart Warehouse Simulator
 
 OpenEnv-compliant warehouse simulation with multi-robot coordination, obstacle avoidance, package pickup and delivery, and an OpenAI-compatible LLM planning path.
