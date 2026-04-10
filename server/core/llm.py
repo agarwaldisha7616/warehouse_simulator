@@ -46,6 +46,22 @@ def _available_targets(observation: Dict[str, Any]) -> List[str]:
     ]
 
 
+def _coerce_valid_action(text: str, valid_actions: List[str]) -> str:
+    candidate = text.strip().strip("`").strip('"').strip("'")
+    if candidate in valid_actions:
+        return candidate
+
+    first_line = candidate.splitlines()[0].strip() if candidate else ""
+    if first_line in valid_actions:
+        return first_line
+
+    for action in sorted(valid_actions, key=len, reverse=True):
+        if action in candidate:
+            return action
+
+    raise LLMPlanningError(f"LLM produced invalid action: {text}")
+
+
 def heuristic_plan(user_prompt: str, observation: Dict[str, Any]) -> LLMPlan:
     del user_prompt
     next_agent = observation.get("next_agent_id", "robot_1")
@@ -85,7 +101,7 @@ class WarehouseLLM:
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
-                temperature=0.1,
+                temperature=0.0,
                 max_tokens=max_tokens,
             )
         except Exception as exc:
@@ -131,17 +147,14 @@ Last action failed: {observation.get('last_action_failed')}
 Collision reason: {collision_reason}
 """
 
-        action = self._chat(
+        raw_action = self._chat(
             [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=16,
-        ).splitlines()[0].strip()
-
-        if action not in valid_actions:
-            raise LLMPlanningError(f"LLM produced invalid action: {action}")
-        return action
+        )
+        return _coerce_valid_action(raw_action, valid_actions)
 
     def get_plan(self, user_prompt: str, observation: Dict[str, Any]) -> LLMPlan:
         system_prompt = """

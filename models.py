@@ -32,6 +32,9 @@ class RobotObservation(Observation):
     last_action_agent_id: Optional[str] = None
     last_action_failed: bool = False
     collision_reason: Optional[str] = None
+    failed_action_count: int = 0
+    expired_package_count: int = 0
+    progress_score: float = 0.0
 
 
 class RobotState(State):
@@ -45,6 +48,9 @@ class RobotState(State):
     episode_id: str = "ep_0"
     step_count: int = 0
     next_agent_id: str = "robot_1"
+    failed_action_count: int = 0
+    expired_package_count: int = 0
+    all_delivered: bool = False
 
 
 class LLMRequest(BaseModel):

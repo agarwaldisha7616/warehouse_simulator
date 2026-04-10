@@ -3,6 +3,7 @@ import threading
 from typing import Any, Dict, Optional
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -14,6 +15,8 @@ from server.core.constants import TASK_CONFIGS
 from server.core.llm import LLMPlanningError, Task, WarehouseLLM, heuristic_plan
 from server.environment import SmartWarehouseEnv
 
+
+load_dotenv()
 
 ALLOW_HEURISTIC_FALLBACK = os.getenv("ALLOW_HEURISTIC_FALLBACK", "").lower() in {
     "1",
@@ -158,7 +161,12 @@ def ui_llm_plan(request: LLMRequest):
         planner = WarehouseLLM()
         plan = planner.get_plan(request.prompt, observation_payload)
     except LLMPlanningError as exc:
-        if not ALLOW_HEURISTIC_FALLBACK:
+        if not ALLOW_HEURISTIC_FALLBACK and os.getenv("STRICT_LLM_UI", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         plan = heuristic_plan(request.prompt, observation_payload)
 

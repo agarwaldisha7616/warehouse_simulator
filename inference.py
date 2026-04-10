@@ -3,6 +3,8 @@ import os
 import sys
 from typing import Iterable, List
 
+from dotenv import load_dotenv
+
 from client import WarehouseClient
 from models import RobotAction, RobotObservation
 from server.core.agents import MultiRobotCoordinator
@@ -10,17 +12,13 @@ from server.core.constants import TASK_CONFIGS
 from server.core.llm import LLMPlanningError, WarehouseLLM
 
 
+load_dotenv()
+
 ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
 DEBUG = os.getenv("DEBUG", "").lower() in {"1", "true", "yes", "on"}
-ALLOW_HEURISTIC_FALLBACK = os.getenv("ALLOW_HEURISTIC_FALLBACK", "").lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 
 
 def _debug(message: str):
@@ -123,18 +121,16 @@ def choose_next_action(
     agent_id = observation.next_agent_id or "robot_1"
 
     if llm is not None:
-        valid_actions = _build_valid_actions(observation_dict)
-        action_text = llm.choose_action(
-            observation_dict,
-            valid_actions,
-            objective=objective,
-        )
-        return _parse_action_string(action_text, agent_id)
-
-    if not ALLOW_HEURISTIC_FALLBACK:
-        raise LLMPlanningError(
-            "LLM is unavailable and heuristic fallback is disabled."
-        )
+        try:
+            valid_actions = _build_valid_actions(observation_dict)
+            action_text = llm.choose_action(
+                observation_dict,
+                valid_actions,
+                objective=objective,
+            )
+            return _parse_action_string(action_text, agent_id)
+        except (LLMPlanningError, ValueError) as exc:
+            _debug(f"[DEBUG] Falling back to deterministic planner: {exc}")
     return coordinator.get_action(observation, agent_id=agent_id)
 
 
@@ -211,6 +207,17 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         default=None,
         help="Optional hard cap on steps per task.",
     )
+    parser.add_argument(
+        "--planner",
+        choices=["deterministic", "llm", "auto"],
+        default="deterministic",
+        help="Planner to use. 'auto' tries LLM first and falls back safely.",
+    )
+    parser.add_argument(
+        "--env-url",
+        default=ENV_URL,
+        help="Base URL for the running environment server.",
+    )
     return parser.parse_args(list(argv))
 
 
@@ -219,20 +226,21 @@ def main(argv: Iterable[str] | None = None) -> int:
     task_levels = args.task_level or list(TASK_CONFIGS.keys())
     coordinator = MultiRobotCoordinator()
 
-    try:
-        llm = WarehouseLLM(
-            api_base_url=API_BASE_URL,
-            model_name=MODEL_NAME,
-            api_key=HF_TOKEN,
-        )
-    except LLMPlanningError as exc:
-        if not ALLOW_HEURISTIC_FALLBACK:
-            print(f"[ERROR] {exc}", flush=True)
-            return 1
-        llm = None
-        _debug(f"[DEBUG] Falling back to deterministic coordinator: {exc}")
+    llm = None
+    if args.planner in {"llm", "auto"}:
+        try:
+            llm = WarehouseLLM(
+                api_base_url=API_BASE_URL,
+                model_name=MODEL_NAME,
+                api_key=HF_TOKEN,
+            )
+        except LLMPlanningError as exc:
+            _debug(f"[DEBUG] Falling back to deterministic coordinator: {exc}")
 
-    client = WarehouseClient(base_url=ENV_URL).sync()
+    if args.planner == "deterministic":
+        llm = None
+
+    client = WarehouseClient(base_url=args.env_url).sync()
     scores: List[float] = []
 
     try:

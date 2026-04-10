@@ -10,35 +10,53 @@ tags:
   - logistics
 
 observation_space:
+  done: "bool — episode completion flag"
+  reward: "float — normalized progress reward in [0.0, 1.0]"
+  robot_position: "List[int] — convenience position for robot_1"
+  carrying_package: "Optional[str] — package currently carried by robot_1"
   robots: "Dict[str, Dict] — Dictionary of robot states, keyed by agent_id (e.g. robot_1). Contains 'pos' [x,y] and 'carrying_id'."
   packages: "List[dict] — id, position, deadline, delivered status"
   obstacles: "List[Tuple] — blocked grid cells"
   grid_size: "int — N of N×N grid"
   steps_remaining: "int — steps left in episode"
   message: "str — feedback from last action"
+  delivered_count: "int — number of delivered packages"
+  total_packages: "int — total packages in the episode"
+  next_agent_id: "str — robot whose turn is next"
+  last_action: "Optional[str] — formatted last action"
+  last_action_agent_id: "Optional[str] — robot that took the last action"
+  last_action_failed: "bool — whether the previous action failed"
+  collision_reason: "Optional[str] — wall, obstacle, or robot collision detail"
+  failed_action_count: "int — cumulative failed actions in the episode"
+  expired_package_count: "int — packages whose deadlines reached zero"
+  progress_score: "float — normalized progress snapshot in [0.0, 1.0]"
 
 action_space:
   agent_id: "str — The robot executing the action (e.g. robot_1, robot_2)"
   direction: "str — up | down | left | right | none"
   action: "str — move | pick | deliver | move_to | no_op"
+  target: "Optional[str] — package id or Delivery Zone for move_to, pick, and deliver"
 
 tasks:
   - id: easy
     name: "Easy Warehouse"
-    description: "5x5 grid, 1 robot, 1 package, no obstacles. Test basic navigation and delivery."
+    description: "Coordinate 2 robots on a 6x6 grid to deliver 2 packages while navigating a light obstacle layout."
     difficulty: easy
-    expected_score_random: "0.2"
+    expected_score_random: "0.12"
+    grader: "tasks.easy.grader:grade"
 
   - id: medium
     name: "Medium Warehouse"
-    description: "10x10 grid, 2 robots, 3 packages, 5 obstacles. Test path optimization and basic task allocation."
+    description: "Coordinate 2 robots on a 10x10 grid to deliver 4 packages with tighter routing pressure and denser obstacles."
     difficulty: medium
     expected_score_random: "0.05"
+    grader: "tasks.medium.grader:grade"
 
   - id: hard
     name: "Hard Warehouse"
-    description: "15x15 grid, 3 robots, 5 packages, 15 obstacles. Requires advanced coordination and collision avoidance."
+    description: "Coordinate 3 robots on a 15x15 grid to deliver 6 packages under heavy routing pressure and a dense obstacle field."
     difficulty: hard
-    expected_score_random: "0.0"
+    expected_score_random: "0.01"
+    grader: "tasks.hard.grader:grade"
 
-delivery_zone: "[0, 0]"
+delivery_zone: [0, 0]

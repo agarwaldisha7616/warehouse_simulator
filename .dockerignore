@@ -7,6 +7,7 @@
 venv/
 env/
 .env/
+.codex
 .git/
 .gitignore
 .gitattributes
@@ -23,6 +24,4 @@ htmlcov/
 dist/
 build/
 *.egg-info/
-uv.lock
 PROJECT_CONTEXT.md
-

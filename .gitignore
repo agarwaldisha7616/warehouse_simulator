@@ -1,4 +1,5 @@
 .env
+.codex
 PROJECT_CONTEXT.md
 __pycache__/
 *.pyc
@@ -10,4 +11,3 @@ venv/
 frontend/node_modules/
 frontend/.next/
 frontend/tsconfig.tsbuildinfo
-uv.lock

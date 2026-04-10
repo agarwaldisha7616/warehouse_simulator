@@ -6,56 +6,72 @@ pinned: false
 
 # Smart Warehouse Simulator
 
-OpenEnv-compliant warehouse simulation with multi-robot coordination, obstacle avoidance, package pickup and delivery, and an OpenAI-compatible LLM planning path.
+OpenEnv-compatible warehouse simulation with multi-robot coordination, obstacle avoidance, package pickup and delivery, explicit task graders, and an optional OpenAI-compatible planning path.
 
-## Architecture
-
-### Backend
-- FastAPI + OpenEnv server entrypoint: [server/app.py](/home/niku/Documents/warehouse_simulator/server/app.py)
-- Environment implementation: [server/environment.py](/home/niku/Documents/warehouse_simulator/server/environment.py)
-- Deterministic robot coordination and pathing: [server/core/agents.py](/home/niku/Documents/warehouse_simulator/server/core/agents.py)
-- Task definitions by difficulty: [server/core/constants.py](/home/niku/Documents/warehouse_simulator/server/core/constants.py)
-- OpenAI-compatible LLM planner: [server/core/llm.py](/home/niku/Documents/warehouse_simulator/server/core/llm.py)
-
-### Frontend
-- Next.js demo UI: [frontend/src/app/page.tsx](/home/niku/Documents/warehouse_simulator/frontend/src/app/page.tsx)
-- The UI talks to session-aware demo endpoints under `/ui/*`
-
-### Inference
-- Root inference runner: [inference.py](/home/niku/Documents/warehouse_simulator/inference.py)
-- Uses OpenAI-compatible chat completions and emits `[START]`, `[STEP]`, `[END]` logs
+## Repo Layout
+- `server/app.py`: FastAPI + OpenEnv server entrypoint
+- `server/environment.py`: warehouse environment implementation
+- `server/core/agents.py`: deterministic multi-robot coordinator
+- `server/core/llm.py`: optional OpenAI-compatible planner
+- `inference.py`: baseline inference runner with deterministic default
+- `tasks/`: task metadata and per-task grader modules
+- `frontend/`: optional Next.js demo UI
+- `openenv.yaml`: submission manifest
+- `validate.py`: local submission validation script
 
 ## Action Space
-- `agent_id`: robot identifier such as `robot_1`
+- `agent_id`: robot id such as `robot_1`
 - `action`: `move | move_to | pick | deliver | no_op`
 - `direction`: `up | down | left | right | none`
 - `target`: optional package id or `Delivery Zone`
 
 ## Observation Space
+- `done`: episode completion flag
+- `reward`: normalized progress reward in `0.0-1.0`
 - `robots`: per-robot position and carrying state
 - `packages`: package id, position, deadline, delivery status
 - `obstacles`: blocked grid cells
 - `grid_size`: board size
 - `steps_remaining`: remaining steps in the episode
 - `message`: feedback from the last step
-- `next_agent_id`: which robot acts next
-- `last_action_failed`: failure flag for the previous action
-- `collision_reason`: debug detail for blocked movement
+- `delivered_count`: delivered package count
+- `total_packages`: total packages in the episode
+- `next_agent_id`: whose turn is next
+- `last_action_failed`: whether the last action failed
+- `collision_reason`: blocked-move detail
+- `failed_action_count`: cumulative failed actions
+- `expired_package_count`: packages that expired
+- `progress_score`: normalized episode progress snapshot
 
-## Environment Variables
-- `API_BASE_URL`: OpenAI-compatible base URL, for example `https://router.huggingface.co/v1`
-- `MODEL_NAME`: model identifier, for example `Qwen/Qwen2.5-7B-Instruct`
-- `HF_TOKEN`: Hugging Face token or compatible API key
-- `ENV_URL`: environment server URL, default `http://localhost:7860`
+## Tasks And Graders
+- `easy`: `tasks.easy.grader:grade`
+- `medium`: `tasks.medium.grader:grade`
+- `hard`: `tasks.hard.grader:grade`
+
+All task metadata is centralized in `tasks/specs.py`. `server/core/constants.py` imports that data directly so runtime config and `openenv.yaml` stay aligned.
 
 ## Setup
 ```bash
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+npm install --prefix frontend
+cp .env.example .env
 ```
+
+## Environment Variables
+- `ENV_URL`: environment server URL, default `http://127.0.0.1:7860`
+- `API_BASE_URL`: OpenAI-compatible base URL
+- `MODEL_NAME`: model identifier for optional LLM planning
+- `HF_TOKEN`: Hugging Face token or compatible API key
+- `NEXT_PUBLIC_API_BASE`: frontend API base, default `http://127.0.0.1:7860/ui`
+
+The backend and inference script auto-load `.env` if present.
 
 ## Run Backend
 ```bash
-venv/bin/python -m uvicorn server.app:app --host 0.0.0.0 --port 7860
+source venv/bin/activate
+uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```
 
 OpenEnv endpoints:
@@ -75,42 +91,55 @@ Demo UI endpoints:
 
 ## Run Frontend
 ```bash
+source venv/bin/activate
 npm run dev --prefix frontend
 ```
 
-Optional custom backend URL for the frontend:
-```bash
-export NEXT_PUBLIC_API_BASE="http://localhost:7860/ui"
-```
-
 ## Run Inference
+Deterministic baseline, safe for submission smoke tests:
 ```bash
-export API_BASE_URL="https://router.huggingface.co/v1"
-export MODEL_NAME="Qwen/Qwen2.5-7B-Instruct"
-export HF_TOKEN="hf_xxxxx"
-export ENV_URL="http://localhost:7860"
-
-python inference.py "Coordinate all robots to deliver every package safely."
+source venv/bin/activate
+python inference.py --planner deterministic "Coordinate all robots to deliver every package safely."
 ```
 
-Run a single level:
+Single task:
 ```bash
-python inference.py --task-level hard "Deliver all packages safely."
+python inference.py --planner deterministic --task-level hard "Deliver all packages safely."
+```
+
+Optional LLM-assisted mode:
+```bash
+python inference.py --planner auto "Coordinate all robots to deliver every package safely."
 ```
 
 ## Validation
 ```bash
-venv/bin/openenv validate . -v
-venv/bin/python validate.py
-npm run build --prefix frontend
+source venv/bin/activate
+openenv validate . -v
+python validate.py
 ```
 
-## Difficulty Levels
-- `easy`: 2 robots, small grid, light obstacles
-- `medium`: 2 robots, more packages, tighter deadlines, more obstacles
-- `hard`: 3 robots, larger grid, denser routing pressure, more packages
+`validate.py` checks:
+- required submission files
+- manifest/task/grader alignment
+- task smoke tests using the deterministic coordinator
+- normalized reward and score ranges
+- local inference stdout markers
+- frontend production build
 
-## Notes
-- The submission path is FastAPI/OpenEnv, not Flask.
-- The LLM path is OpenAI-compatible, not Gemini.
-- Heuristic fallback is disabled unless `ALLOW_HEURISTIC_FALLBACK` is explicitly enabled.
+## Docker And Deployment
+- Root `Dockerfile`: for Hugging Face Docker Spaces
+- `server/Dockerfile`: kept aligned for server-specific workflows
+
+Local Docker test:
+```bash
+docker build -t warehouse-simulator .
+docker run -p 7860:7860 warehouse-simulator
+```
+
+## Submission Checklist
+- Run `python validate.py`
+- Confirm your Hugging Face Space boots successfully from the root `Dockerfile`
+- Verify `/reset` returns a valid observation on the deployed Space
+- Verify `python inference.py --planner deterministic --task-level easy` completes without error
+- Submit the deployed Space URL and repo details through the Scaler dashboard
